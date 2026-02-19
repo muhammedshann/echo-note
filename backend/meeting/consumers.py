@@ -12,13 +12,22 @@ import urllib.parse
 import shutil
 from django.conf import settings
 import wave
-import ffmpeg
+import subprocess
 
 
 logger = logging.getLogger(__name__)
 
+_whisper_model = None
+
+def get_whisper_model():
+    global _whisper_model
+    if _whisper_model is None:
+        logger.info("Loading Whisper tiny model...")
+        _whisper_model = whisper.load_model("tiny")
+    return _whisper_model
+
 # Load model once at module level
-model = whisper.load_model("tiny")
+# model = whisper.load_model("tiny")
 
 class LiveTranscriptionConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -77,6 +86,7 @@ class LiveTranscriptionConsumer(AsyncWebsocketConsumer):
             # Transcribe in a separate thread
             def transcribe_sync():
                 try:
+                    model = get_whisper_model()
                     result = model.transcribe(
                         temp_file_path, 
                         fp16=False,
@@ -145,13 +155,14 @@ CHUNK_SECONDS = 30
 
     
 class TranscriptionConsumer(AsyncWebsocketConsumer):
+
     async def connect(self):
         self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
         await self.accept()
 
-        # Get file_path from query string
         query_params = parse_qs(self.scope["query_string"].decode())
         self.file_path = query_params.get("supabase_path", [None])[0]
+
         if self.file_path:
             self.file_path = urllib.parse.unquote(self.file_path)
 
@@ -160,8 +171,9 @@ class TranscriptionConsumer(AsyncWebsocketConsumer):
             await self.close()
             return
 
-        # Start transcription task
-        self.transcription_task = asyncio.create_task(self.run_transcription(self.file_path))
+        self.transcription_task = asyncio.create_task(
+            self.run_transcription(self.file_path)
+        )
 
     async def disconnect(self, close_code):
         if hasattr(self, "transcription_task") and not self.transcription_task.done():
@@ -170,40 +182,25 @@ class TranscriptionConsumer(AsyncWebsocketConsumer):
     async def send_json(self, data):
         await self.send(text_data=json.dumps(data))
 
+    # ✅ Proper ffmpeg subprocess conversion
     def detect_and_convert_audio(self, input_path, output_path):
-        """
-        Convert to 16kHz mono WAV for Whisper using ffmpeg (more reliable than pydub guessing).
-        """
-
         if not os.path.exists(input_path):
             raise FileNotFoundError(f"Input file not found: {input_path}")
 
-        if os.path.getsize(input_path) == 0:
-            raise ValueError("Input file is empty")
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i", input_path,
+            "-ac", "1",
+            "-ar", "16000",
+            "-f", "wav",
+            output_path
+        ]
 
-        try:
-            (
-                ffmpeg
-                .input(input_path)
-                .output(output_path, format="wav", acodec="pcm_s16le", ac=1, ar="16000")
-                .overwrite_output()
-                .run(quiet=True)
-            )
-        except ffmpeg.Error as e:
-            raise RuntimeError(f"FFmpeg conversion failed: {e.stderr.decode()}")
+        subprocess.run(command, check=True)
 
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            raise ValueError("Conversion failed: output file missing or empty")
-
-        return True
-
-    @staticmethod
-    def load_whisper_model(model_name="base"):
-        """Cache model globally so we don’t reload every connection"""
-        if not hasattr(TranscriptionConsumer, "_whisper_model"):
-            print(f"Loading Whisper model: {model_name}")
-            TranscriptionConsumer._whisper_model = whisper.load_model(model_name)
-        return TranscriptionConsumer._whisper_model
+        if not os.path.exists(output_path):
+            raise RuntimeError("FFmpeg conversion failed")
 
     def transcribe_chunk(self, model, file_path):
         return model.transcribe(file_path, language="en", fp16=False)
@@ -211,35 +208,24 @@ class TranscriptionConsumer(AsyncWebsocketConsumer):
     async def run_transcription(self, file_path: str):
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
-                # keep file extension when saving
+
                 ext = os.path.splitext(file_path)[-1] or ".tmp"
                 local_file = os.path.join(tmpdir, f"input{ext}")
 
-                # Download or copy file
                 success = download_from_local_or_supabase(file_path, local_file)
                 if not success:
                     await self.send_json({"error": f"File not found: {file_path}"})
                     return
 
-                if os.path.getsize(local_file) == 0:
-                    await self.send_json({"error": "Downloaded file is empty"})
-                    return
-
-                await self.send_json({"info": f"File downloaded ({os.path.getsize(local_file)} bytes)"})
-
-                # Convert to WAV
                 audio_path = os.path.join(tmpdir, "audio.wav")
-                try:
-                    await asyncio.get_event_loop().run_in_executor(
-                        None, self.detect_and_convert_audio, local_file, audio_path
-                    )
-                except Exception as e:
-                    await self.send_json({"error": f"Conversion failed: {str(e)}"})
-                    return
 
-                # Load audio with pydub
+                await asyncio.get_event_loop().run_in_executor(
+                    None, self.detect_and_convert_audio, local_file, audio_path
+                )
+
                 audio = AudioSegment.from_wav(audio_path)
                 duration_ms = len(audio)
+
                 if duration_ms == 0:
                     await self.send_json({"error": "Converted audio has no duration"})
                     return
@@ -247,12 +233,13 @@ class TranscriptionConsumer(AsyncWebsocketConsumer):
                 CHUNK_MS = 30 * 1000
                 total_chunks = (duration_ms + CHUNK_MS - 1) // CHUNK_MS
 
-                # Load model (cached)
+                # ✅ Use global lazy loader (not class-level duplicate)
                 model = await asyncio.get_event_loop().run_in_executor(
-                    None, self.load_whisper_model
+                    None, get_whisper_model
                 )
 
                 for chunk_index in range(total_chunks):
+
                     start_ms = chunk_index * CHUNK_MS
                     end_ms = min(start_ms + CHUNK_MS, duration_ms)
 
@@ -265,16 +252,20 @@ class TranscriptionConsumer(AsyncWebsocketConsumer):
                     )
 
                     text = result.get("text", "").strip()
+
                     if text:
                         progress = round((end_ms / duration_ms) * 100, 2)
-                        await self.send_json({"text": text, "progress": progress})
+                        await self.send_json({
+                            "text": text,
+                            "progress": progress
+                        })
 
-                # await self.send_json({"text": "[TRANSCRIPTION COMPLETE]", "progress": 100})
                 await self.close()
 
         except Exception as e:
             await self.send_json({"error": f"Transcription failed: {str(e)}"})
             await self.close()
+
 
 import yt_dlp
 def downloadVideo(url, output_dir="media/downloads"):
