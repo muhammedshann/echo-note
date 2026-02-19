@@ -1,4 +1,5 @@
 Django==5.2.11
+djangorestframework
 channels==4.3.2
 daphne==4.2.1
 django-cors-headers==4.9.0
