@@ -18,7 +18,7 @@ import ffmpeg
 logger = logging.getLogger(__name__)
 
 # Load model once at module level
-model = whisper.load_model("base")
+model = whisper.load_model("tiny")
 
 class LiveTranscriptionConsumer(AsyncWebsocketConsumer):
     async def connect(self):
