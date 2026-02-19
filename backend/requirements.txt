@@ -44,8 +44,6 @@ websockets==16.0
 whitenoise==6.11.0
 youtube-transcript-api==1.2.4
 yt-dlp==2026.2.4
-yt-dlp-ejs==0.4.0
 zope.interface==8.2
 openai-whisper
-ffmpeg-python
 supabase
