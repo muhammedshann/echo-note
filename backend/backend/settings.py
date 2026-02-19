@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from pathlib import Path
+import os
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -37,12 +39,14 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'corsheaders',
     'rest_framework',
     'channels',
     'meeting'
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -127,7 +131,22 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+# Create media directory if it doesn't exist
+os.makedirs(MEDIA_ROOT, exist_ok=True)
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5174",
+]
+
+CORS_ALLOW_ALL_ORIGINS = True
+
+SUPABASE_URL = "https://gqmtydfkomvcftbqosjg.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdxbXR5ZGZrb212Y2Z0YnFvc2pnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3MzA4NTUsImV4cCI6MjA3MjMwNjg1NX0.5djSRXHXBPNIFnalfA056kXqm4pAAAR45diCZdjFxI4"
+SUPABASE_BUCKET = "media"  # make sure this bucket exists

@@ -56,6 +56,15 @@ const Hero = () => {
                                     <span>Upload</span>
                                 </Link>
                             </button>
+                            <button className="px-6 py-3 rounded-lg font-semibold border border-gray-300 bg-white/60 backdrop-blur-md text-gray-700 shadow hover:bg-gray-100 transition">
+                                <Link 
+                                    to="/youtube/" 
+                                    className="flex items-center justify-center space-x-2"
+                                >
+                                    <Upload className="h-6 w-6 text-blue-500" />
+                                    <span>youtube</span>
+                                </Link>
+                            </button>
 
                         </div>
 

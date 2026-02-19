@@ -2,8 +2,18 @@ import whisper
 import tempfile
 import os
 import asyncio
+import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 import logging
+from .supabase_client import download_from_supabase
+from pydub import AudioSegment
+from urllib.parse import parse_qs
+import urllib.parse
+import shutil
+from django.conf import settings
+import wave
+import ffmpeg
+
 
 logger = logging.getLogger(__name__)
 
@@ -113,3 +123,187 @@ class LiveTranscriptionConsumer(AsyncWebsocketConsumer):
         
         # If transcription changed completely, return it (might be correction)
         return current_transcription
+    
+
+def download_from_local_or_supabase(file_path, local_destination):
+    try:
+        local_file_path = os.path.join(settings.MEDIA_ROOT, file_path)
+        if os.path.exists(local_file_path):
+            shutil.copy2(local_file_path, local_destination)
+            print(f"Copied local file: {local_file_path} -> {local_destination}")
+            return True
+        else:
+            print(f"File not found locally, trying Supabase: {file_path}")
+            download_from_supabase(file_path, local_destination)
+            return True
+    except Exception as e:
+        raise Exception(f"Failed to get file from local or Supabase: {str(e)}")
+
+    
+
+CHUNK_SECONDS = 30
+
+    
+class TranscriptionConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
+        await self.accept()
+
+        # Get file_path from query string
+        query_params = parse_qs(self.scope["query_string"].decode())
+        self.file_path = query_params.get("supabase_path", [None])[0]
+        if self.file_path:
+            self.file_path = urllib.parse.unquote(self.file_path)
+
+        if not self.file_path:
+            await self.send_json({"error": "No file path provided"})
+            await self.close()
+            return
+
+        # Start transcription task
+        self.transcription_task = asyncio.create_task(self.run_transcription(self.file_path))
+
+    async def disconnect(self, close_code):
+        if hasattr(self, "transcription_task") and not self.transcription_task.done():
+            self.transcription_task.cancel()
+
+    async def send_json(self, data):
+        await self.send(text_data=json.dumps(data))
+
+    def detect_and_convert_audio(self, input_path, output_path):
+        """
+        Convert to 16kHz mono WAV for Whisper using ffmpeg (more reliable than pydub guessing).
+        """
+
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+
+        if os.path.getsize(input_path) == 0:
+            raise ValueError("Input file is empty")
+
+        try:
+            (
+                ffmpeg
+                .input(input_path)
+                .output(output_path, format="wav", acodec="pcm_s16le", ac=1, ar="16000")
+                .overwrite_output()
+                .run(quiet=True)
+            )
+        except ffmpeg.Error as e:
+            raise RuntimeError(f"FFmpeg conversion failed: {e.stderr.decode()}")
+
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise ValueError("Conversion failed: output file missing or empty")
+
+        return True
+
+    @staticmethod
+    def load_whisper_model(model_name="base"):
+        """Cache model globally so we don’t reload every connection"""
+        if not hasattr(TranscriptionConsumer, "_whisper_model"):
+            print(f"Loading Whisper model: {model_name}")
+            TranscriptionConsumer._whisper_model = whisper.load_model(model_name)
+        return TranscriptionConsumer._whisper_model
+
+    def transcribe_chunk(self, model, file_path):
+        return model.transcribe(file_path, language="en", fp16=False)
+
+    async def run_transcription(self, file_path: str):
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # keep file extension when saving
+                ext = os.path.splitext(file_path)[-1] or ".tmp"
+                local_file = os.path.join(tmpdir, f"input{ext}")
+
+                # Download or copy file
+                success = download_from_local_or_supabase(file_path, local_file)
+                if not success:
+                    await self.send_json({"error": f"File not found: {file_path}"})
+                    return
+
+                if os.path.getsize(local_file) == 0:
+                    await self.send_json({"error": "Downloaded file is empty"})
+                    return
+
+                await self.send_json({"info": f"File downloaded ({os.path.getsize(local_file)} bytes)"})
+
+                # Convert to WAV
+                audio_path = os.path.join(tmpdir, "audio.wav")
+                try:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, self.detect_and_convert_audio, local_file, audio_path
+                    )
+                except Exception as e:
+                    await self.send_json({"error": f"Conversion failed: {str(e)}"})
+                    return
+
+                # Load audio with pydub
+                audio = AudioSegment.from_wav(audio_path)
+                duration_ms = len(audio)
+                if duration_ms == 0:
+                    await self.send_json({"error": "Converted audio has no duration"})
+                    return
+
+                CHUNK_MS = 30 * 1000
+                total_chunks = (duration_ms + CHUNK_MS - 1) // CHUNK_MS
+
+                # Load model (cached)
+                model = await asyncio.get_event_loop().run_in_executor(
+                    None, self.load_whisper_model
+                )
+
+                for chunk_index in range(total_chunks):
+                    start_ms = chunk_index * CHUNK_MS
+                    end_ms = min(start_ms + CHUNK_MS, duration_ms)
+
+                    chunk = audio[start_ms:end_ms]
+                    chunk_file = os.path.join(tmpdir, f"chunk_{chunk_index}.wav")
+                    chunk.export(chunk_file, format="wav")
+
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None, self.transcribe_chunk, model, chunk_file
+                    )
+
+                    text = result.get("text", "").strip()
+                    if text:
+                        progress = round((end_ms / duration_ms) * 100, 2)
+                        await self.send_json({"text": text, "progress": progress})
+
+                # await self.send_json({"text": "[TRANSCRIPTION COMPLETE]", "progress": 100})
+                await self.close()
+
+        except Exception as e:
+            await self.send_json({"error": f"Transcription failed: {str(e)}"})
+            await self.close()
+
+import yt_dlp
+def downloadVideo(url, output_dir="media/downloads"):
+    os.makedirs(output_dir, exist_ok=True)
+    
+    ydl_opts = {
+        # CHANGE 1: Use a more flexible format string
+        'format': 'm4a/bestaudio/best', 
+        'outtmpl': f"{output_dir}/%(id)s.%(ext)s",
+        'cookiesfrombrowser': ('chrome',),
+        'noplaylist': True,
+        # CHANGE 2: Add 'quiet' and 'no_warnings' to keep logs clean
+        'quiet': False,
+        # CHANGE 3: Add these specific arguments to bypass bot detection
+        'nocheckcertificate': True,
+        'ignoreerrors': False,
+        'logtostderr': False,
+        'addheader': [
+            'Accept-Language: en-US,en;q=0.9',
+            'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+        ],
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        # yt_dlp will have converted it to .mp3 because of the postprocessor
+        return os.path.join(output_dir, f"{info['id']}.mp3")

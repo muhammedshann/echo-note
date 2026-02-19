@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Square, Play, Pause, Loader, Clock, Activity } from 'lucide-react';
-import Header from '../components/Header'
+import { Mic, Square, Play, Pause, Loader, Clock, Activity, Sparkles, X, Terminal, Radio } from 'lucide-react';
+import Header from '../components/Header';
+import Footer from '../components/Footer';
 
 const RecorderComponent = () => {
     const [recordingState, setRecordingState] = useState('stopped');
@@ -8,7 +9,6 @@ const RecorderComponent = () => {
     const [transcription, setTranscription] = useState('');
     const [analysisResult, setAnalysisResult] = useState('');
 
-    // Refs to maintain references across renders
     const wsRef = useRef(null);
     const recorderRef = useRef(null);
     const streamRef = useRef(null);
@@ -25,11 +25,8 @@ const RecorderComponent = () => {
         return () => clearInterval(intervalRef.current);
     }, [recordingState]);
 
-    // Cleanup on unmount
     useEffect(() => {
-        return () => {
-            stopRecording();
-        };
+        return () => stopRecording();
     }, []);
 
     const formatTime = (seconds) => {
@@ -44,241 +41,215 @@ const RecorderComponent = () => {
             setTranscription('');
             setAnalysisResult('');
 
-            // Create WebSocket connection
             const socket = new WebSocket("ws://127.0.0.1:8000/ws/live/");
             wsRef.current = socket;
 
-            socket.onopen = () => {
-                console.log('WebSocket connected');
-            };
-
             socket.onmessage = (event) => {
                 const newText = event.data.trim();
-                if (newText) {
-                    // Option 1: Replace with latest transcription
-                    setTranscription(newText);
-                    
-                    // Option 2: Append only if different (uncomment if you prefer accumulating)
-                    // setTranscription((prev) => {
-                    //     if (!prev.includes(newText)) {
-                    //         return prev ? prev + " " + newText : newText;
-                    //     }
-                    //     return prev;
-                    // });
-                }
+                if (newText) setTranscription(newText);
             };
 
-            socket.onerror = (error) => {
-                console.error('WebSocket error:', error);
-            };
-
-            socket.onclose = () => {
-                console.log('WebSocket disconnected');
-            };
-
-            // Get audio stream
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 audio: {
-                    sampleRate: 16000, // Whisper prefers 16kHz
-                    channelCount: 1,   // Mono audio
+                    sampleRate: 16000,
+                    channelCount: 1,
                     echoCancellation: true,
                     noiseSuppression: true
                 } 
             });
             streamRef.current = stream;
 
-            // Use audio/wav instead of webm for better compatibility
-            const mimeType = MediaRecorder.isTypeSupported('audio/wav') 
-                ? 'audio/wav' 
-                : MediaRecorder.isTypeSupported('audio/webm') 
-                ? 'audio/webm' 
-                : 'audio/ogg';
-
+            const mimeType = MediaRecorder.isTypeSupported('audio/wav') ? 'audio/wav' : 'audio/webm';
             const mediaRecorder = new MediaRecorder(stream, { mimeType });
             recorderRef.current = mediaRecorder;
 
             mediaRecorder.ondataavailable = async (e) => {
-                if (e.data.size > 0 && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                    try {
-                        const buffer = await e.data.arrayBuffer();
-                        wsRef.current.send(buffer);
-                    } catch (error) {
-                        console.error('Error sending audio data:', error);
-                    }
+                if (e.data.size > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
+                    const buffer = await e.data.arrayBuffer();
+                    wsRef.current.send(buffer);
                 }
             };
 
-            mediaRecorder.onerror = (error) => {
-                console.error('MediaRecorder error:', error);
-            };
-
-            mediaRecorder.start(2000); // Send chunks every 2 seconds for better transcription
+            mediaRecorder.start(2000);
             
         } catch (error) {
-            console.error('Error starting recording:', error);
             setRecordingState('stopped');
         }
     };
 
     const pauseRecording = () => {
-        if (recorderRef.current && recorderRef.current.state === 'recording') {
+        if (recorderRef.current?.state === 'recording') {
             recorderRef.current.pause();
             setRecordingState('paused');
         }
     };
 
     const resumeRecording = () => {
-        if (recorderRef.current && recorderRef.current.state === 'paused') {
+        if (recorderRef.current?.state === 'paused') {
             recorderRef.current.resume();
             setRecordingState('recording');
         }
     };
 
     const stopRecording = () => {
-        // Stop media recorder
-        if (recorderRef.current) {
-            if (recorderRef.current.state !== 'inactive') {
-                recorderRef.current.stop();
-            }
-            recorderRef.current = null;
-        }
+        if (recorderRef.current?.state !== 'inactive') recorderRef.current?.stop();
+        streamRef.current?.getTracks().forEach(track => track.stop());
+        wsRef.current?.close();
+        if (intervalRef.current) clearInterval(intervalRef.current);
 
-        // Stop audio stream
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
-            streamRef.current = null;
-        }
-
-        // Close WebSocket
-        if (wsRef.current) {
-            wsRef.current.close();
-            wsRef.current = null;
-        }
-
-        // Clear timer
-        if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-        }
-
+        const duration = recordingTime;
         setRecordingState('stopped');
         
-        // Show analysis result
-        const duration = recordingTime;
         setTimeout(() => {
-            setAnalysisResult(`Recording complete. Quality: High • Clarity: 96% • Duration: ${duration}s • Language: English detected`);
+            setAnalysisResult(`Recording secured. Quality: High-Fidelity • Duration: ${duration}s • Signal: Optimized`);
             setRecordingTime(0);
-        }, 1000);
+        }, 100);
     };
 
     const handleButtonClick = () => {
-        if (recordingState === 'stopped') {
-            startRecording();
-        } else if (recordingState === 'recording') {
-            pauseRecording();
-        } else if (recordingState === 'paused') {
-            resumeRecording();
-        }
+        if (recordingState === 'stopped') startRecording();
+        else if (recordingState === 'recording') pauseRecording();
+        else if (recordingState === 'paused') resumeRecording();
     };
 
     return (
-        <div className="min-h-screen bg-gray-50">
-            {/* Header */}
+        <div className="min-h-screen bg-[#050505] text-zinc-500 flex flex-col selection:bg-indigo-500/30">
             <Header />
-            <div className="bg-white border-b border-gray-100 pt-15">
-                <div className="max-w-4xl mx-auto px-6 py-6">
-                    <h1 className="text-2xl font-semibold text-gray-900">Audio Recorder</h1>
-                    <p className="text-gray-500 mt-1">Record and transcribe audio in real-time</p>
-                </div>
-            </div>
 
-            <div className="max-w-2xl mx-auto px-6 py-12">
-                {/* Recording Interface */}
-                <div className="bg-white rounded-lg border border-gray-200 p-8 mb-8">
-                    {/* Status Display */}
-                    <div className="text-center mb-8">
-                        <div className={`inline-flex items-center justify-center w-20 h-20 rounded-full border-2 mb-4 transition-colors ${
-                            recordingState === 'recording'
-                                ? 'border-red-400 bg-red-50'
-                                : recordingState === 'paused'
-                                ? 'border-orange-400 bg-orange-50'
-                                : 'border-gray-300 bg-gray-50'
-                        }`}>
-                            <Mic className={`w-8 h-8 ${
-                                recordingState === 'recording' ? 'text-red-500' :
-                                recordingState === 'paused' ? 'text-orange-500' : 'text-gray-400'
-                            }`} />
+            <main className="flex-grow flex flex-col items-center justify-center relative overflow-hidden px-6 py-12">
+                {/* Background Glow */}
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[400px] bg-indigo-500/5 blur-[120px] pointer-events-none" />
+
+                <div className="w-full max-w-3xl relative z-10">
+                    <header className="mb-10">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Radio className={`w-3.5 h-3.5 ${recordingState === 'recording' ? 'text-red-500 animate-pulse' : 'text-zinc-600'}`} />
+                            <span className="text-[10px] uppercase tracking-[0.3em] font-bold text-zinc-600">Neural Capture</span>
                         </div>
+                        <h1 className="text-xl md:text-2xl font-medium text-zinc-100 tracking-tight">
+                            Voice <span className="text-indigo-500">Live</span> Processor
+                        </h1>
+                    </header>
 
-                        <div className="flex items-center justify-center space-x-2 mb-2">
-                            <Clock className="w-5 h-5 text-gray-400" />
-                            <span className="text-3xl font-mono text-gray-900">{formatTime(recordingTime)}</span>
-                        </div>
-
-                        <div className={`text-sm font-medium ${
-                            recordingState === 'recording' ? 'text-red-600' :
-                            recordingState === 'paused' ? 'text-orange-600' : 'text-gray-500'
-                        }`}>
-                            {recordingState === 'recording' ? 'Recording...' :
-                             recordingState === 'paused' ? 'Paused' : 'Ready to record'}
-                        </div>
-                    </div>
-
-                    {/* Controls */}
-                    <div className="flex justify-center space-x-4">
-                        <button
-                            onClick={handleButtonClick}
-                            className={`flex items-center justify-center w-12 h-12 text-white rounded-full transition-colors ${
-                                recordingState === 'stopped' 
-                                    ? 'bg-green-500 hover:bg-green-600'
-                                    : recordingState === 'recording'
-                                    ? 'bg-orange-500 hover:bg-orange-600'
-                                    : 'bg-green-500 hover:bg-green-600'
-                            }`}
-                        >
-                            {recordingState === 'stopped' ? (
-                                <Play className="w-5 h-5 ml-0.5" />
-                            ) : recordingState === 'recording' ? (
-                                <Pause className="w-5 h-5" />
-                            ) : (
-                                <Play className="w-5 h-5 ml-0.5" />
-                            )}
-                        </button>
-
-                        <button
-                            onClick={stopRecording}
-                            disabled={recordingState === 'stopped'}
-                            className="flex items-center justify-center w-12 h-12 bg-red-500 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-full transition-colors"
-                        >
-                            <Square className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
-
-                {/* Transcription Panel */}
-                <div className="bg-white rounded-lg border border-gray-200 p-6">
-                    <div className="flex items-center mb-4">
-                        <Activity className="w-5 h-5 text-gray-400 mr-2" />
-                        <h3 className="font-medium text-gray-900">Live Transcription</h3>
-                    </div>
-
-                    <div className="min-h-[100px] text-gray-600 leading-relaxed">
-                        {recordingState === 'recording' && !transcription ? (
-                            <div className="flex items-center space-x-2">
-                                <Loader className="w-4 h-4 animate-spin text-gray-400" />
-                                <span className="text-gray-500">Listening...</span>
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                        {/* Control Panel */}
+                        <div className="md:col-span-5 bg-zinc-950/50 border border-zinc-900 rounded-2xl p-8 flex flex-col items-center justify-center relative group">
+                            <div className="absolute inset-0 bg-indigo-500/0 group-hover:bg-indigo-500/[0.02] transition-colors rounded-2xl pointer-events-none" />
+                            
+                            {/* Recording Sphere */}
+                            <div className={`relative w-24 h-24 rounded-full flex items-center justify-center mb-6 transition-all duration-700 ${
+                                recordingState === 'recording' ? 'bg-indigo-500/10 border border-indigo-500/20' : 'bg-zinc-900 border border-zinc-800'
+                            }`}>
+                                {recordingState === 'recording' && (
+                                    <div className="absolute inset-0 rounded-full border border-indigo-500/50 animate-ping opacity-20" />
+                                )}
+                                <Mic className={`w-8 h-8 transition-colors ${
+                                    recordingState === 'recording' ? 'text-indigo-400' : 'text-zinc-700'
+                                }`} />
                             </div>
-                        ) : transcription ? (
-                            <p>{transcription}</p>
-                        ) : analysisResult ? (
-                            <div className="p-4 bg-green-50 rounded border border-green-200">
-                                <p className="text-green-800">{analysisResult}</p>
+
+                            <div className="flex items-center gap-2 mb-2">
+                                <Clock className="w-3.5 h-3.5 text-zinc-600" />
+                                <span className="text-3xl font-mono text-zinc-100 tracking-tighter">{formatTime(recordingTime)}</span>
                             </div>
-                        ) : (
-                            <p className="text-gray-400">Start recording to see live transcription...</p>
-                        )}
+
+                            <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-zinc-600 mb-8">
+                                {recordingState === 'recording' ? 'System Active' : recordingState === 'paused' ? 'Paused' : 'Awaiting Input'}
+                            </p>
+
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={handleButtonClick}
+                                    className={`w-12 h-12 flex items-center justify-center rounded-xl border transition-all active:scale-95 ${
+                                        recordingState === 'recording' 
+                                        ? 'bg-zinc-100 border-white text-black' 
+                                        : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
+                                    }`}
+                                >
+                                    {recordingState === 'recording' ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+                                </button>
+
+                                <button
+                                    onClick={stopRecording}
+                                    disabled={recordingState === 'stopped'}
+                                    className="w-12 h-12 flex items-center justify-center rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 hover:bg-red-500 hover:text-white disabled:opacity-20 transition-all active:scale-95"
+                                >
+                                    <Square className="w-4 h-4 fill-current" />
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Transcription Panel */}
+                        <div className="md:col-span-7 bg-zinc-950 border border-zinc-900 rounded-2xl flex flex-col h-[320px]">
+                            <div className="px-5 py-3 border-b border-zinc-900 flex justify-between items-center bg-zinc-900/30">
+                                <div className="flex items-center gap-2">
+                                    <Activity className="w-3.5 h-3.5 text-indigo-500" />
+                                    <span className="text-[10px] uppercase tracking-widest font-bold text-zinc-600">Live Synthesis</span>
+                                </div>
+                                <Terminal className="w-3.5 h-3.5 text-zinc-800" />
+                            </div>
+
+                            <div className="p-6 flex-grow overflow-y-auto custom-scrollbar">
+                                {recordingState === 'recording' && !transcription ? (
+                                    <div className="flex items-center gap-2 text-indigo-400/50">
+                                        <Loader className="w-3 h-3 animate-spin" />
+                                        <span className="text-[11px] uppercase tracking-widest font-bold">Listening...</span>
+                                    </div>
+                                ) : transcription ? (
+                                    <p className="text-[13px] leading-relaxed text-zinc-300 font-serif italic animate-in fade-in duration-500">
+                                        "{transcription}"
+                                    </p>
+                                ) : analysisResult ? (
+                                    <div className="p-4 bg-indigo-500/5 border border-indigo-500/10 rounded-lg">
+                                        <p className="text-[11px] text-indigo-400 font-mono leading-relaxed">{analysisResult}</p>
+                                    </div>
+                                ) : (
+                                    <p className="text-[11px] text-zinc-700 uppercase tracking-widest font-bold text-center mt-20">
+                                        Initialize stream to begin...
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Footer Info */}
+                    <div className="mt-12 flex items-center justify-between border-t border-zinc-900 pt-6">
+                        <div className="flex gap-8">
+                            <div>
+                                <p className="text-[9px] uppercase tracking-[0.2em] text-zinc-600 mb-1">Status</p>
+                                <p className="text-[11px] font-mono text-zinc-400 uppercase tracking-tighter">
+                                    {recordingState === 'recording' ? 'Streaming' : 'Ready'}
+                                </p>
+                            </div>
+                            <div>
+                                <p className="text-[9px] uppercase tracking-[0.2em] text-zinc-600 mb-1">Latency</p>
+                                <p className="text-[11px] font-mono text-zinc-400 uppercase tracking-tighter">0.12ms</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 text-zinc-700">
+                            <span className="text-[9px] uppercase tracking-widest">Echo-Note v2.4</span>
+                            <div className="w-1.5 h-1.5 rounded-full bg-indigo-500/30" />
+                        </div>
                     </div>
                 </div>
-            </div>
+            </main>
+            <Footer />
+
+            <style jsx>{`
+                .custom-scrollbar::-webkit-scrollbar {
+                    width: 4px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-track {
+                    background: transparent;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb {
+                    background: rgba(255, 255, 255, 0.05);
+                    border-radius: 10px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                    background: rgba(255, 255, 255, 0.1);
+                }
+            `}</style>
         </div>
     );
 };

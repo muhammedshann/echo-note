@@ -6,6 +6,7 @@ import HomePage from './pages/HomePage'
 import { Route,BrowserRouter,Routes } from 'react-router-dom'
 import RecorderComponent from './pages/Recorder'
 import UploadComponent from './pages/upload'
+import YouTubeDownloader from './pages/youtube'
 
 function App() {
 
@@ -16,6 +17,7 @@ function App() {
         <Route path='/' element={<HomePage/>}/>
         <Route path='/live-recording/' element={<RecorderComponent/>} />
         <Route path='/upload/' element={<UploadComponent/>} />
+        <Route path='/youtube/' element={<YouTubeDownloader/>} />
       </Routes>
     </BrowserRouter>
     </>
